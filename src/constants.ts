@@ -1,6 +1,6 @@
 import * as path from 'path';
 
-export const IS_PROD_BUILD = !!process.env.HTTPTOOLKIT_SERVER_BINPATH;
+export const IS_PROD_BUILD = true;
 
 // Notably, for this file, this is the same when either bundled or unbundled.
 // That's not true for most other files! Everything should use this instead of __dirname:
