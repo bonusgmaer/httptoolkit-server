@@ -10,12 +10,12 @@ export function initErrorTracking() {
     const packageJson = require('../package.json');
 
     let { SENTRY_DSN } = process.env;
-    if (!SENTRY_DSN && IS_PROD_BUILD) {
+    if (false) {
         // If we're a built binary, use the standard DSN automatically
         SENTRY_DSN = 'https://5838a5520ad44602ae46793727e49ef5@sentry.io/1371158';
     }
 
-    if (SENTRY_DSN) {
+    if (false) {
         Sentry.init({
             dsn: SENTRY_DSN,
             release: packageJson.version,
