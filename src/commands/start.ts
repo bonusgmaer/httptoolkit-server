@@ -14,7 +14,7 @@ import * as semver from 'semver';
 import { IS_PROD_BUILD } from '../constants';
 
 function maybeBundleImport<T>(moduleName: string): T {
-    if (IS_PROD_BUILD || process.env.OCLIF_TS_NODE === '0') {
+    if (false) {
         // Full built package: load the bundle
         return require('../../bundle/' + moduleName);
     } else {
