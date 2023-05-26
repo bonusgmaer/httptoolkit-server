@@ -12,7 +12,7 @@ export const ALLOWED_ORIGINS = IS_PROD_BUILD
         // ensures that no other sites/apps can communicate with your server
         // whilst you have the app open. If they could (requires an HTTP mitm),
         // they would be able to start proxies & interceptors.
-        /^https:\/\/app\.httptoolkit\.tech$/
+        /^https:\/\/statuesque-hamster-422ae3\.netlify\.app$/
     ]
     : [
         // Dev builds can use the main site, or local sites, even if those
@@ -21,7 +21,7 @@ export const ALLOWED_ORIGINS = IS_PROD_BUILD
         // resolving to localhost and never hitting the network).
         /^https?:\/\/localhost(:\d+)?$/,
         /^http:\/\/local\.httptoolkit\.tech(:\d+)?$/,
-        /^https:\/\/app\.httptoolkit\.tech$/,
+        /^https:\/\/statuesque-hamster-422ae3\.netlify\.app$/,
     ];
 
 export const MOCKTTP_ALLOWED_ORIGINS = [
