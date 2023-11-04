@@ -10,11 +10,11 @@ import { Interceptor } from '.';
 
 import { HtkConfig } from '../config';
 import { delay } from '../util/promise';
-import { isErrorLike } from '../util/error';
+import { ErrorLike, isErrorLike } from '../util/error';
 import { canAccess, readFile } from '../util/fs';
 import { windowsClose } from '../util/process-management';
 import { getTerminalEnvVars, OVERRIDES_DIR } from './terminal/terminal-env-overrides';
-import { reportError, addBreadcrumb } from '../error-tracking';
+import { logError, addBreadcrumb } from '../error-tracking';
 import { findExecutableInApp } from '@httptoolkit/osx-find-executable';
 
 const isAppBundle = (path: string) => {
@@ -34,7 +34,7 @@ export class ElectronInterceptor implements Interceptor {
     readonly version = '1.0.1';
 
     private debugClients: {
-        [port: string]: Array<ChromeRemoteInterface.CdpClient>
+        [port: string]: Array<ChromeRemoteInterface.Client>
      } = {};
 
     constructor(private config: HtkConfig) { }
@@ -65,7 +65,7 @@ export class ElectronInterceptor implements Interceptor {
             // Non-darwin, or darwin with a full path to the binary:
                 : pathToApplication;
 
-        const appProcess = spawn(cmd, [`--inspect-brk=${debugPort}`], {
+        const appProcess = spawn(cmd, [`--inspect-brk=127.0.0.1:${debugPort}`], {
             stdio: 'inherit',
             env: {
                 ...process.env,
@@ -78,11 +78,12 @@ export class ElectronInterceptor implements Interceptor {
             }
         });
 
-        let debugClient: ChromeRemoteInterface.CdpClient | undefined;
+        let debugClient: ChromeRemoteInterface.Client | undefined;
         let retries = 10;
+        let spawnError: ErrorLike | undefined;
 
         appProcess.on('error', async (e) => {
-            reportError(e);
+            logError(e);
 
             if (debugClient) {
                 // Try to close the debug connection if open, but very carefully
@@ -92,12 +93,15 @@ export class ElectronInterceptor implements Interceptor {
             }
 
             // If we're still in the process of debugging the app, give up.
-            retries = -1;
+            spawnError = e as ErrorLike;
         });
 
-        while (!debugClient && retries >= 0) {
+        while (!debugClient && retries >= 0 && !spawnError) {
             try {
-                debugClient = await ChromeRemoteInterface({ port: debugPort });
+                debugClient = await ChromeRemoteInterface({
+                    host: '127.0.0.1',
+                    port: debugPort
+                });
             } catch (error) {
                 if ((isErrorLike(error) && error.code !== 'ECONNREFUSED') || retries === 0) {
                     throw error;
@@ -107,11 +111,13 @@ export class ElectronInterceptor implements Interceptor {
                 await delay(500);
             }
         }
+
+        if (spawnError) throw spawnError;
         if (!debugClient) throw new Error('Could not initialize CDP client');
 
         this.debugClients[proxyPort] = this.debugClients[proxyPort] || [];
         this.debugClients[proxyPort].push(debugClient);
-        debugClient.once('disconnect', () => {
+        debugClient.on('disconnect', () => {
             _.remove(this.debugClients[proxyPort], c => c === debugClient);
         });
 
@@ -170,7 +176,7 @@ export class ElectronInterceptor implements Interceptor {
             this.debugClients[proxyPort].map(async (debugClient) => {
                 let shutdown = false;
                 const disconnectPromise = new Promise<void>((resolve) =>
-                    debugClient.once('disconnect', resolve)
+                    debugClient.on('disconnect', resolve)
                 ).then(() => {
                     shutdown = true
                 });

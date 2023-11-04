@@ -63,7 +63,6 @@ module.exports = {
         'registry-js', // Native module
         'win-version-info', // Native module
         'node-datachannel', // Native module
-        'vm2', // Does odd things with require, can't be webpack'd
         '_stream_wrap', // Used in httpolyglot only in old Node, where it's available
         function (context, request, callback) {
             if (context !== __dirname && request.endsWith('/error-tracking')) {
@@ -84,7 +83,7 @@ module.exports = {
         new webpack.IgnorePlugin({ resourceRegExp: /^utf-8-validate$/ }),
         // Optimistically required in headless, falls back to child_process
         new webpack.IgnorePlugin({ resourceRegExp: /^child-killer$/ }),
-        // GraphQL playground - required but never used in production bundles
+        // GraphQL playground - never used
         new webpack.NormalModuleReplacementPlugin(/^\.\/renderGraphiQL$/, 'node-noop'),
         // SSH2 - used within Dockerode, but we don't support it and it has awkward native deps
         new webpack.NormalModuleReplacementPlugin(/^ssh2$/, 'node-noop'),

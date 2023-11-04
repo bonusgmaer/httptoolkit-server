@@ -8,7 +8,8 @@ const envToken = process.env.HTK_SERVER_TOKEN;
 delete process.env.HTK_SERVER_TOKEN; // Don't let anything else see this
 
 import * as path from 'path';
-import { promises as fs } from 'fs'
+import { promises as fs } from 'fs';
+import * as net from 'net';
 import * as semver from 'semver';
 
 import { IS_PROD_BUILD } from '../constants';
@@ -22,7 +23,7 @@ function maybeBundleImport<T>(moduleName: string): T {
         return require('../' + moduleName);
     }
 }
-const { initErrorTracking, reportError } = maybeBundleImport<ErrorTrackingModule>('error-tracking');
+const { initErrorTracking, logError } = maybeBundleImport<ErrorTrackingModule>('error-tracking');
 initErrorTracking();
 
 import { Command, flags } from '@oclif/command'
@@ -43,15 +44,33 @@ class HttpToolkitServer extends Command {
     async run() {
         const { flags } = this.parse(HttpToolkitServer);
 
+        if (net.setDefaultAutoSelectFamily) { // Backward compat for Node <v20
+            net.setDefaultAutoSelectFamily(false); // Disable this for now - new in Node v20 and seems unstable
+        }
+        this.setProcessTitle();
         this.cleanupOldServers(); // Async cleanup old server versions
 
         await runHTK({
             configPath: flags.config,
             authToken: envToken || flags.token
         }).catch(async (error) => {
-            await reportError(error);
+            await logError(error);
             throw error;
         });
+    }
+
+    setProcessTitle() {
+        if (process.platform === 'win32') return; // Not possible on Windows, as far as I can tell.
+
+        // Set the process title for easier management in activity monitor etc. This has some limitations,
+        // see https://nodejs.org/api/process.html#processtitle for details. In our case it's v likely to
+        // work regardless, as the full paths used in the desktop app are fairly long already, plus the
+        // path to the 'run' bin plus 'start', but we include a shorter fallback just in case too:
+        const currentProcessTitle = [process.argv0, ...process.argv.slice(1)].join(' ');
+        process.title = currentProcessTitle.length > 18
+            ? "HTTP Toolkit Server"
+            : "htk-server";
+
     }
 
     // On startup, we want to kill any downloaded servers that are not longer necessary
@@ -65,7 +84,7 @@ class HttpToolkitServer extends Command {
 
         // Be careful - if the server path isn't clearly ours somehow, ignore it.
         if (!isOwnedPath(serverUpdatesPath)) {
-            reportError(`Unexpected server updates path (${serverUpdatesPath}), ignoring`);
+            logError(`Unexpected server updates path (${serverUpdatesPath}), ignoring`);
             return;
         }
 
@@ -84,19 +103,19 @@ class HttpToolkitServer extends Command {
             filename !== '.DS_Store' // Meaningless Mac folder metadata
         )) {
             console.log(serverPaths);
-            reportError(
+            logError(
                 `Server path (${serverUpdatesPath}) contains unexpected content, ignoring`
             );
             return;
         }
 
-        const maybeReportError = (error: Error & { code?: string }) => {
+        const maybeLogError = (error: Error & { code?: string }) => {
             if ([
                 'EBUSY',
                 'EPERM'
             ].includes(error.code!)) return;
 
-            else reportError(error);
+            else logError(error);
         };
 
         if (serverPaths.every((filename) => {
@@ -107,7 +126,7 @@ class HttpToolkitServer extends Command {
             // a new server standalone (not just from an update), because otherwise the
             // update dir can end up in a broken state. Better to clear it completely.
             console.log("Downloaded server directory is entirely outdated, deleting it");
-            deleteFolder(serverUpdatesPath).catch(maybeReportError);
+            deleteFolder(serverUpdatesPath).catch(maybeLogError);
         } else {
             // Some of the servers are outdated, but not all (maybe it includes us).
             // Async delete all server versions older than this currently running version.
@@ -116,7 +135,7 @@ class HttpToolkitServer extends Command {
 
                 if (version && semver.lt(version, currentVersion)) {
                     console.log(`Deleting old server ${filename}`);
-                    deleteFolder(path.join(serverUpdatesPath, filename)).catch(maybeReportError);
+                    deleteFolder(path.join(serverUpdatesPath, filename)).catch(maybeLogError);
                 }
             });
         }
@@ -151,7 +170,7 @@ function isOwnedPath(input: string) {
     if (input.split(path.sep).includes('httptoolkit-server')) {
         return true;
     } else {
-        reportError(`Unexpected unowned path ${input}`);
+        logError(`Unexpected unowned path ${input}`);
         return false;
     }
 }

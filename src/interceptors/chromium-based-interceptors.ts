@@ -1,33 +1,29 @@
 import _ from 'lodash';
+import * as path from 'path';
 import { generateSPKIFingerprint } from 'mockttp';
 
 import { HtkConfig } from '../config';
 
-import {
-    getAvailableBrowsers,
-    launchBrowser,
-    BrowserInstance,
-    Browser,
-    LaunchOptions
-} from '../browsers';
 import { delay } from '../util/promise';
 import { readFile, deleteFolder } from '../util/fs';
 import { listRunningProcesses, windowsClose, waitForExit } from '../util/process-management';
+import { getSnapConfigPath, isSnap } from '../util/snap';
+
+import {
+    getBrowserDetails,
+    launchBrowser,
+    BrowserInstance,
+    LaunchOptions
+} from '../browsers';
 import { HideWarningServer } from '../hide-warning-server';
 import { Interceptor } from '.';
-import { reportError } from '../error-tracking';
+import { logError } from '../error-tracking';
 import { WEBEXTENSION_INSTALL } from '../webextension';
-
-const getBrowserDetails = async (config: HtkConfig, variant: string): Promise<Browser | undefined> => {
-    const browsers = await getAvailableBrowsers(config.configPath);
-
-    // Get the details for the first of these browsers that is installed.
-    return _.find(browsers, b => b.name === variant);
-};
 
 const getChromiumLaunchOptions = async (
     browser: string,
     config: HtkConfig,
+    profilePath: string | null | undefined,
     proxyPort: number,
     hideWarningServer: HideWarningServer,
     webExtensionEnabled: boolean
@@ -36,6 +32,7 @@ const getChromiumLaunchOptions = async (
     const spkiFingerprint = generateSPKIFingerprint(certificatePem);
 
     return {
+        profile: profilePath,
         browser,
         proxy: `https://127.0.0.1:${proxyPort}`,
         noProxy: [
@@ -57,7 +54,9 @@ const getChromiumLaunchOptions = async (
             '--disable-features=ChromeWhatsNewUI',
             // Avoid annoying extra network noise:
             '--disable-background-networking',
-            '--disable-component-update',
+            // Disable component update (without disabling components themselves, e.g. widevine)
+            // See https://bugs.chromium.org/p/chromium/issues/detail?id=331932
+            '--component-updater=url-source=http://disabled-chromium-update.localhost:0',
             '--check-for-update-interval=31536000', // Don't update for a year
             ...(webExtensionEnabled && WEBEXTENSION_INSTALL
                 // Install HTTP Toolkit's extension, for advanced hook setup. Feature
@@ -91,7 +90,7 @@ abstract class FreshChromiumBasedInterceptor implements Interceptor {
     }
 
     async isActivable() {
-        const browserDetails = await getBrowserDetails(this.config, this.variantName)
+        const browserDetails = await getBrowserDetails(this.config.configPath, this.variantName)
         return !!browserDetails;
     }
 
@@ -101,12 +100,17 @@ abstract class FreshChromiumBasedInterceptor implements Interceptor {
         const hideWarningServer = new HideWarningServer(this.config);
         await hideWarningServer.start('https://amiusing.httptoolkit.tech');
 
-        const browserDetails = await getBrowserDetails(this.config, this.variantName);
+        const browserDetails = await getBrowserDetails(this.config.configPath, this.variantName);
+
+        const profilePath = browserDetails && await isSnap(browserDetails.command)
+            ? path.join(await getSnapConfigPath(this.variantName), 'profile')
+            : undefined;
 
         const browser = await launchBrowser(hideWarningServer.hideWarningUrl,
             await getChromiumLaunchOptions(
                 browserDetails ? browserDetails.name : this.variantName,
                 this.config,
+                profilePath,
                 proxyPort,
                 hideWarningServer,
                 !!options.webExtensionEnabled
@@ -129,13 +133,13 @@ abstract class FreshChromiumBasedInterceptor implements Interceptor {
             if (process.platform === 'win32' && this.variantName === 'opera') return;
             await delay(1000); // No hurry, make sure the browser & related processes have all cleaned up
 
-            if (Object.keys(this.activeBrowsers).length === 0 && browserDetails && _.isString(browserDetails.profile)) {
+            if (Object.keys(this.activeBrowsers).length === 0 && typeof browserDetails?.profile === 'string') {
                 // If we were the last browser, and we have a profile path, and it's in our config
                 // (just in case something's gone wrong) -> delete the profile to reset everything.
 
                 const profilePath = browserDetails.profile;
                 if (!profilePath.startsWith(this.config.configPath)) {
-                    reportError(
+                    logError(
                         `Unexpected ${this.variantName} profile location, not deleting: ${profilePath}`
                     );
                 } else {
@@ -186,7 +190,7 @@ abstract class ExistingChromiumBasedInterceptor implements Interceptor {
     ) { }
 
     async browserDetails() {
-        return getBrowserDetails(this.config, this.variantName);
+        return getBrowserDetails(this.config.configPath, this.variantName);
     }
 
     isActive(proxyPort: number | string) {
@@ -273,10 +277,11 @@ abstract class ExistingChromiumBasedInterceptor implements Interceptor {
             }
         }
 
-        const browserDetails = await getBrowserDetails(this.config, this.variantName);
+        const browserDetails = await getBrowserDetails(this.config.configPath, this.variantName);
         const launchOptions = await getChromiumLaunchOptions(
             browserDetails ? browserDetails.name : this.variantName,
             this.config,
+            null, // Null profile path ensures we use the system default profile
             proxyPort,
             hideWarningServer,
             !!options.webExtensionEnabled
@@ -298,8 +303,7 @@ abstract class ExistingChromiumBasedInterceptor implements Interceptor {
 
         const browser = await launchBrowser("", {
             ...launchOptions,
-            skipDefaults: true,
-            profile: null // Enforce that we use the default profile
+            skipDefaults: true
         }, this.config.configPath);
 
         if (browser.process.stdout) browser.process.stdout.pipe(process.stdout);

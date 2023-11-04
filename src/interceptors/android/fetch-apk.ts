@@ -1,12 +1,11 @@
-import * as fs from 'fs';
 import * as path from 'path';
 import * as stream from 'stream';
 import * as semver from 'semver';
 import fetch from 'node-fetch';
 
-import { readDir, createTmp, moveFile, deleteFile } from '../../util/fs';
+import * as fs from '../../util/fs';
 import { HtkConfig } from '../../config';
-import { reportError } from '../../error-tracking';
+import { logError } from '../../error-tracking';
 
 async function getLatestRelease(): Promise<{ version: string, url: string } | undefined> {
     try {
@@ -30,7 +29,7 @@ async function getLatestRelease(): Promise<{ version: string, url: string } | un
 }
 
 async function getAllLocalApks(config: HtkConfig) {
-    const apks = (await readDir(config.configPath))
+    const apks = (await fs.readDir(config.configPath))
         .map(filename => filename.match(/^httptoolkit-(.*).apk$/))
         .filter((match): match is RegExpMatchArray => !!match)
         .map((match) => ({
@@ -53,7 +52,7 @@ async function getLatestLocalApk(config: HtkConfig) {
         else return latestLocalApk;
     } catch (e) {
         console.log("Could not check for local Android app APK", e);
-        reportError(e);
+        logError(e);
     }
 }
 
@@ -68,7 +67,7 @@ async function updateLocalApk(
         path: tmpApk,
         fd: tmpApkFd,
         cleanupCallback
-    } = await createTmp({ keep: true });
+    } = await fs.createTmp({ keep: true });
 
     const tmpApkStream = fs.createWriteStream(tmpApk, { fd: tmpApkFd });
     apkStream.pipe(tmpApkStream);
@@ -88,7 +87,7 @@ async function updateLocalApk(
 
     console.log(`Local APK written to ${tmpApk}`);
 
-    await moveFile(tmpApk, path.join(config.configPath, `httptoolkit-${version}.apk`));
+    await fs.moveFile(tmpApk, path.join(config.configPath, `httptoolkit-${version}.apk`));
     console.log(`Local APK moved to ${path.join(config.configPath, `httptoolkit-${version}.apk`)}`);
     await cleanupOldApks(config);
 }
@@ -96,7 +95,7 @@ async function updateLocalApk(
 export async function clearAllApks(config: HtkConfig) {
     const apks = await getAllLocalApks(config);
     console.log(`Deleting all APKs: ${apks.map(apk => apk.path).join(', ')}`);
-    return Promise.all(apks.map(apk => deleteFile(apk.path)));
+    return Promise.all(apks.map(apk => fs.deleteFile(apk.path)));
 }
 
 // Delete all but the most recent APK version in the config directory.
@@ -106,7 +105,7 @@ async function cleanupOldApks(config: HtkConfig) {
     console.log(`Deleting old APKs: ${apks.slice(1).map(apk => apk.path).join(', ')}`);
 
     return Promise.all(
-        apks.slice(1).map(apk => deleteFile(apk.path))
+        apks.slice(1).map(apk => fs.deleteFile(apk.path))
     );
 }
 
@@ -131,7 +130,7 @@ export async function streamLatestApk(config: HtkConfig): Promise<stream.Readabl
             const apkOutputStream = new stream.PassThrough({ highWaterMark: 10485760 });
             apkStream.pipe(apkOutputStream);
 
-            updateLocalApk(latestApkRelease.version, apkFileStream, config).catch(reportError);
+            updateLocalApk(latestApkRelease.version, apkFileStream, config).catch(logError);
             return apkOutputStream;
         }
     }
@@ -147,7 +146,7 @@ export async function streamLatestApk(config: HtkConfig): Promise<stream.Readabl
     fetch(latestApkRelease.url).then((apkResponse) => {
         const apkStream = apkResponse.body;
         return updateLocalApk(latestApkRelease.version, apkStream, config);
-    }).catch(reportError);
+    }).catch(logError);
 
     console.log('Streaming local APK, and updating it async');
     return fs.createReadStream(localApk.path);

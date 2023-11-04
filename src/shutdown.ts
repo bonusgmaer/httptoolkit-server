@@ -1,19 +1,19 @@
-import { reportError } from './error-tracking';
+import { logError } from './error-tracking';
 import { delay } from './util/promise';
 
 type ShutdownHandler = () => Promise<unknown>;
 const shutdownHandlers: Array<ShutdownHandler> = [];
 
 export function registerShutdownHandler() {
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown(0, 'SIGTERM'));
+    process.on('SIGINT', () => shutdown(0, 'SIGINT'));
 }
 
 export function addShutdownHandler(handler: ShutdownHandler) {
     shutdownHandlers.push(handler);
 }
 
-export async function shutdown(cause: string) {
+export async function shutdown(code: number, cause: string) {
     console.log(`Shutting down after ${cause}...`);
 
     const shutdownPromises = Promise.all(shutdownHandlers.map(
@@ -21,7 +21,7 @@ export async function shutdown(cause: string) {
             try {
                 await handler();
             } catch (e) {
-                reportError(e);
+                logError(e);
             }
         }
     ));
@@ -31,6 +31,6 @@ export async function shutdown(cause: string) {
         delay(2000) // After 2 seconds, we just close anyway, we're done.
     ]);
 
-    process.exit(0);
+    process.exit(code);
 }
 

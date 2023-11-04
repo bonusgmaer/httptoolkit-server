@@ -10,7 +10,7 @@ import {
     update as updateBrowserCacheCb
 } from '@httptoolkit/browser-launcher';
 
-import { reportError } from './error-tracking';
+import { logError } from './error-tracking';
 import { delay } from './util/promise';
 import { isErrorLike } from './util/error';
 import { readFile, deleteFile } from './util/fs';
@@ -40,7 +40,7 @@ export async function checkBrowserConfig(configPath: string) {
             if (isErrorLike(err) && err.code === 'ENOENT') return;
 
             console.error('Failed to clear broken config file:', err);
-            reportError(err);
+            logError(err);
         });
     }
 }
@@ -63,13 +63,13 @@ function getLauncher(configPath: string) {
                 // Need to reload the launcher after updating the cache:
                 launcher = getBrowserLauncher(browserConfig);
             } catch (e) {
-                reportError(e)
+                logError(e)
             }
         });
 
         // Reset & retry if this fails somehow:
         launcher.catch((e) => {
-            reportError(e);
+            logError(e);
             launcher = undefined;
         });
     }
@@ -79,6 +79,13 @@ function getLauncher(configPath: string) {
 
 export const getAvailableBrowsers = async (configPath: string) => {
     return (await getLauncher(configPath)).browsers;
+};
+
+export const getBrowserDetails = async (configPath: string, variant: string): Promise<Browser | undefined> => {
+    const browsers = await getAvailableBrowsers(configPath);
+
+    // Get the details for the first matching browsers that is installed:
+    return browsers.find(b => b.name === variant);
 };
 
 export { LaunchOptions };
@@ -92,7 +99,7 @@ export const launchBrowser = async (url: string, options: LaunchOptions, configP
         // fallback error handling: log & report & don't crash.
         if (browserInstance.process.listenerCount('error') === 1) {
             console.log('Browser launch error');
-            reportError(e);
+            logError(e);
         }
     });
 

@@ -12,7 +12,7 @@ HTTP Toolkit runs everything possible within [the web UI](https://github.com/htt
 * Start a locally running proxy server (here using [Mockttp](https://npmjs.com/package/mockttp))
 * Launch local applications preconfigured for interception
 
-This server exposes an API that is used by the web UI, exposing these actions and some other related information. The API itself is GraphQL, see [`src/api-server.ts`](src/api-server.ts) for the full details.
+This server exposes an API that is used by the web UI, exposing these actions and some other related information - see [`src/api/rest-api.ts`](src/api/rest-server.ts) for the full API details.
 
 This server is runnable standalone as a CLI using [oclif](http://oclif.io), or can be imported into other modules to be run programmatically. The available interceptors are defined in [`src/interceptors`](src/interceptors), and some of these also use other services in here, e.g. [`src/cert-check-server.ts`](src/cert-check-server.ts) automatically checks if a certificate is trusted by a browser client, and downloads or installs (depending on the client) the certificate if not.
 
@@ -39,6 +39,6 @@ To get started:
 
 A few tips:
 
-* Running the server with `ENABLE_PLAYGROUND` set to `true` at the top of [`src/api-server.ts`](src/api-server.ts#L16) will give you a GraphQL playground on http://localhost:45457/.
 * New interceptors need to be added to `src/interceptors/index.ts`. They will also need to be added to [the UI](https://github.com/httptoolkit/httptoolkit-ui).
-* The tests assume that the required applications are installed and some docker images are already pulled. See [ci.yml](.github/workflows/ci.yml) and the [build-base](https://github.com/httptoolkit/act-build-base/) image for an example of how to set this up (or just run the tests, look at the errors, and install whatever's missing).
+* Tests (both unit & integration) can be run with `npm test`, or `npm run test:unit`/`npm run test:integration` to run just the unit/integration tests.
+* Note that the integration tests assume the required applications are installed and some docker images are already pulled. See [ci.yml](.github/workflows/ci.yml) and the [build-base](https://github.com/httptoolkit/act-build-base/) image for an example of how to set this up (or just run the tests, look at the errors, and install whatever's missing).

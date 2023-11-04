@@ -6,14 +6,15 @@ import * as net from 'net';
 import * as http from 'http';
 import Dockerode from 'dockerode';
 import getRawBody from 'raw-body';
-import { AbortController } from 'node-abort-controller';
+import { makeDestroyable, DestroyableServer } from 'destroyable-server';
 
 import { chmod, deleteFile, readDir } from '../../util/fs';
 import { rawHeadersToHeaders } from '../../util/http';
-import { makeDestroyable, DestroyableServer } from 'destroyable-server';
-import { reportError } from '../../error-tracking';
+import { streamToBuffer } from '../../util/stream';
+import { logError } from '../../error-tracking';
 import { addShutdownHandler } from '../../shutdown';
 
+import { getDockerAddress } from './docker-utils';
 import {
     isInterceptedContainer,
     transformContainerCreationConfig
@@ -76,12 +77,7 @@ async function createDockerProxy(
 ) {
     const docker = new Dockerode();
 
-    // Hacky logic to reuse docker-modem's internal env + OS parsing logic to
-    // work out where the local Docker host is:
-    const modem = docker.modem as any as ({ socketPath: string } | { host: string, port: number });
-    const dockerHostOptions = 'socketPath' in modem
-        ? { socketPath: modem.socketPath }
-        : { host: modem.host, port: modem.port };
+    const dockerHostOptions = await getDockerAddress(docker);
 
     const agent = new http.Agent({ keepAlive: true });
 
@@ -152,7 +148,7 @@ async function createDockerProxy(
         if (reqPath.match(BUILD_IMAGE_MATCHER)) {
             if (reqUrl.searchParams.get('remote')) {
                 res.writeHead(400);
-                reportError("Build interception failed due to unsupported 'remote' param");
+                logError("Build interception failed due to unsupported 'remote' param");
 
                 if (reqUrl.searchParams.get('remote') === 'client-session') {
                     res.end("HTTP Toolkit does not yet support BuildKit-powered builds");
@@ -212,12 +208,7 @@ async function createDockerProxy(
                 dockerRes.pipe(getBuildOutputPipeline(await extraDockerCommandCount!)).pipe(res);
             } else if (shouldRemapContainerData) {
                 // We need to remap container data, to hook all docker-compose behaviour:
-                const data = await new Promise<Buffer>((resolve, reject) => {
-                    const dataChunks: Buffer[] = [];
-                    dockerRes.on('data', (d) => dataChunks.push(d));
-                    dockerRes.on('end', () => resolve(Buffer.concat(dataChunks)));
-                    dockerRes.on('error', reject);
-                });
+                const data = await streamToBuffer(dockerRes);
 
                 try {
                     if (isComposeContainerQuery) {

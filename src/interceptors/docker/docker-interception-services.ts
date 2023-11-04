@@ -1,9 +1,10 @@
 import Docker from 'dockerode';
 import { ProxySettingCallback } from 'mockttp';
 
-import { reportError } from '../../error-tracking';
+import { logError } from '../../error-tracking';
 import { addShutdownHandler } from '../../shutdown';
 
+import { getDockerAddress } from './docker-utils';
 import { DOCKER_BUILD_LABEL } from './docker-build-injection';
 import { DOCKER_CONTAINER_LABEL } from './docker-commands';
 
@@ -23,14 +24,25 @@ import { ensureDockerInjectionVolumeExists } from './docker-data-injection';
 
 let dockerAvailableCache: Promise<boolean> | undefined;
 
-export const isDockerAvailable = () => {
+export const isDockerAvailable = (options: { logError?: boolean } = {}) => {
     if (dockerAvailableCache) return dockerAvailableCache;
     else {
         dockerAvailableCache = (async () => { // Catch sync & async setup errors
-            await new Docker().ping()
+            return new Docker().info();
         })()
-        .then(() => true)
-        .catch(() => false);
+        .then((info: { OSType?: 'windows' | 'linux' }) => {
+            if (info.OSType === 'windows') {
+                // We don't support Windows containers yet (and I think they're very rarely
+                // used anyway) so we treat Windows-mode Docker as unavailable:
+                throw new Error("Docker running in Windows container mode - not supported");
+            } else {
+                return true;
+            }
+        })
+        .catch((error) => {
+            if (options.logError) console.warn('Docker not available:', error.message);
+            return false;
+        });
 
         // Cache the resulting status for 3 seconds:
         setTimeout(() => { dockerAvailableCache = undefined; }, 3000);
@@ -65,11 +77,16 @@ export async function startDockerInterceptionServices(
     }
 
     // Log if Docker was not available at proxy start, and why, for debugging later:
-    (async () => { // Catch sync & async setup errors
-        await new Docker().ping();
-        console.log('Connected to Docker');
-    })().catch((error) => {
-        console.warn(`Docker not available: ${error.message}`);
+    isDockerAvailable({ logError: true }).then(async (isAvailable) => {
+        if (isAvailable) {
+            const dockerAddress = await getDockerAddress(new Docker());
+            console.log(`Connected to Docker at ${
+                'socketPath' in dockerAddress
+                ? dockerAddress.socketPath
+                : `tcp://${dockerAddress.host}:${dockerAddress.port}`
+            }`);
+        }
+        // logError:true will log the specific not-available error, if this failed
     });
 
     const networkMonitor = monitorDockerNetworkAliases(proxyPort);
@@ -98,7 +115,8 @@ export async function startDockerInterceptionServices(
         // container connecting to a network):
         prepareDockerTunnel(),
         // Create a Docker volume, containing our cert and the override files:
-        ensureDockerInjectionVolumeExists(httpsConfig.certContent)]);
+        ensureDockerInjectionVolumeExists(httpsConfig.certContent)
+    ]);
 }
 
 export async function ensureDockerServicesRunning(proxyPort: number) {
@@ -108,7 +126,7 @@ export async function ensureDockerServicesRunning(proxyPort: number) {
         getDnsServer(proxyPort),
         // We don't double-check on the injection volume here - that's
         // checked separately at the point of use instead.
-    ]).catch(reportError);
+    ]).catch(logError);
 }
 
 export async function stopDockerInterceptionServices(

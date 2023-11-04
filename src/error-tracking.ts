@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import * as child_process from 'child_process';
 import * as Sentry from '@sentry/node';
 import { RewriteFrames } from '@sentry/integrations';
@@ -9,8 +10,14 @@ let sentryInitialized = false;
 export function initErrorTracking() {
     const packageJson = require('../package.json');
 
-    let { SENTRY_DSN } = process.env;
-    if (!SENTRY_DSN && IS_PROD_BUILD) {
+    let { SENTRY_DSN, CI } = process.env;
+
+    const shouldBeEnabled = IS_PROD_BUILD && !CI;
+
+    // Note that we disable all error reporting in CI envs, both our own & others. They
+    // tend to be weird configurations that aren't representative so this isn't useful.
+
+    if (!SENTRY_DSN && shouldBeEnabled) {
         // If we're a built binary, use the standard DSN automatically
         SENTRY_DSN = 'https://5838a5520ad44602ae46793727e49ef5@sentry.io/1371158';
     }
@@ -80,6 +87,14 @@ export function initErrorTracking() {
             scope.setTag('platform', process.platform);
         });
 
+        Sentry.configureScope((scope) => {
+            // We use a random id to distinguish between many errors in one session vs
+            // one error in many sessions. This isn't persisted and can't be used to
+            // identify anybody between sessions.
+            const randomId = randomUUID();
+            scope.setUser({ id: randomId, username: `anon-${randomId}` });
+        });
+
         // Include breadcrumbs for subprocess spawning, to trace interceptor startup details:
         const rawSpawn = child_process.spawn;
         (child_process as any).spawn = function (command: any, args?: any, options?: { [key: string]: string }) {
@@ -107,7 +122,7 @@ export function addBreadcrumb(message: string, data: Sentry.Breadcrumb) {
     Sentry.addBreadcrumb(Object.assign({ message }, data));
 }
 
-export function reportError(error: Error | string | unknown): undefined | Promise<void> {
+export function logError(error: Error | string | unknown): undefined | Promise<void> {
     console.warn(error);
     if (!sentryInitialized) return;
 
