@@ -189,7 +189,8 @@ export async function getRootCommand(adbClient: Adb.DeviceClient): Promise<RootC
         // Run our whoami script with each of the possible root commands
         const rootCheckResults = await Promise.all(
             runAsRootCommands.map((runAsRoot) =>
-                run(adbClient, runAsRoot(...rootTestCommand), { timeout: 1000 }).catch(console.log)
+                run(adbClient, runAsRoot(...rootTestCommand), { timeout: 1000 })
+                    .catch((e: any) => console.log(e.message ?? e))
                 .then((whoami) => ({ cmd: runAsRoot, whoami }))
             )
         )
@@ -206,7 +207,7 @@ export async function getRootCommand(adbClient: Adb.DeviceClient): Promise<RootC
         // We prefer explicit "su" calls if possible, to limit access & side effects.
         await adbClient.root().catch((e: any) => {
             if (isErrorLike(e) && e.message?.includes("adbd is already running as root")) return;
-            else console.log(e);
+            else console.log(e.message ?? e);
         });
 
         // Sometimes switching to root can disconnect ADB devices, so double-check
@@ -233,24 +234,67 @@ export async function getRootCommand(adbClient: Adb.DeviceClient): Promise<RootC
 export async function hasCertInstalled(
     adbClient: Adb.DeviceClient,
     certHash: string,
-    certFingerprint: string
+    expectedFingerprint: string
 ) {
+    // We have to check both of these paths. If /system exists but /apex does not, then something
+    // has gone wrong and we need to reinstall the cert to fix it.
+    const systemCertPath = `/system/etc/security/cacerts/${certHash}.0`;
+    const apexCertPath = `/apex/com.android.conscrypt/cacerts/${certHash}.0`;
+
     try {
-        const certPath = `/system/etc/security/cacerts/${certHash}.0`;
-        const certStream = await adbClient.pull(certPath);
+        const existingCertChecks = await Promise.all([
+            adbClient.pull(systemCertPath)
+                .then(async (certStream) => {
+                    if (await isMatchingCert(certStream, expectedFingerprint)) {
+                        console.log('Matching /system cacert exists');
+                        return true;
+                    } else {
+                        console.log('/system cacert exists but mismatched');
+                        return false;
+                    }
+                }),
 
-        // Wait until it's clear that the read is successful
-        const data = await streamToBuffer(certStream);
+            run(adbClient, ['ls', '/apex/com.android.conscrypt'])
+                .then(async (lsOutput) => {
+                    if (lsOutput.includes('cacerts')) {
+                        const certStream = await adbClient.pull(apexCertPath);
+                        if (await isMatchingCert(certStream, expectedFingerprint)) {
+                            console.log('Matching /apex cacert exists');
+                            return true;
+                        } else {
+                            console.log('/apex cacert exists but mismatched');
+                            return false;
+                        }
+                    } else {
+                        console.log('No need for /apex cacerts injection');
+                        // If apex dir doesn't exist, we don't need to inject anything
+                        return true;
+                    }
+                })
+        ]);
 
-        // The device already has an HTTP Toolkit cert. But is it the right one?
-        const existingCert = parseCert(data.toString('utf8'));
-        const existingFingerprint = getCertificateFingerprint(existingCert);
-        return certFingerprint === existingFingerprint;
-    } catch (e) {
+        return existingCertChecks.every(result => result === true);
+    } catch (e: any) {
         // Couldn't read the cert, or some other error - either way, we probably
         // don't have a working system cert installed.
+        console.log(`Couldn't detect cert via ADB: ${e.message}`);
         return false;
     }
+}
+
+// The device already has an HTTP Toolkit cert. But is it the right one?
+const isMatchingCert = async (certStream: stream.Readable, expectedFingerprint: string) => {
+    // Wait until it's clear that the read is successful
+    const data = await streamToBuffer(certStream);
+
+    // Note that due to https://github.com/DeviceFarmer/adbkit/issues/464 we may see
+    // 'empty' data for files that are actually missing entirely.
+    if (data.byteLength === 0) return false;
+
+    const certData = data.toString('utf8');
+    const existingCert = parseCert(certData);
+    const existingFingerprint = getCertificateFingerprint(existingCert);
+    return expectedFingerprint === existingFingerprint;
 }
 
 export async function injectSystemCertificate(
@@ -267,6 +311,8 @@ export async function injectSystemCertificate(
         adbClient,
         stringAsStream(`
             set -e # Fail on error
+
+            echo "\n---\nInjecting certificate:"
 
             # Create a separate temp directory, to hold the current certificates
             # Without this, when we add the mount we can't read the current certs anymore.
@@ -291,6 +337,8 @@ export async function injectSystemCertificate(
             # Update the perms & selinux context labels, so everything is as readable as before
             chown root:root /system/etc/security/cacerts/*
             chmod 644 /system/etc/security/cacerts/*
+
+            chcon u:object_r:system_file:s0 /system/etc/security/cacerts/
             chcon u:object_r:system_file:s0 /system/etc/security/cacerts/*
 
             echo 'System cacerts setup completed'
@@ -302,6 +350,10 @@ export async function injectSystemCertificate(
                 # When the APEX manages cacerts, we need to mount them at that path too. We can't do
                 # this globally as APEX mounts are namespaced per process, so we need to inject a
                 # bind mount for this directory into every mount namespace.
+
+                # First we mount for the shell itself, for completeness and so we can see this
+                # when we check for correct installation on later runs
+                mount --bind /system/etc/security/cacerts /apex/com.android.conscrypt/cacerts
 
                 # First we get the Zygote process(es), which launch each app
                 ZYGOTE_PID=$(pidof zygote || true)
@@ -343,7 +395,7 @@ export async function injectSystemCertificate(
             rm -r /data/local/tmp/htk-ca-copy
             rm ${injectionScriptPath}
 
-            echo "System cert successfully injected"
+            echo "System cert successfully injected\n---\n"
         `),
         injectionScriptPath,
         // Due to an Android bug, user mode is always duplicated to group & others. We set as read-only

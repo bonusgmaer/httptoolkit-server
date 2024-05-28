@@ -12,16 +12,16 @@ jobs:
     env:
       DIND_HOST: unix:///tmp/docker.sock
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20.8.0
+          node-version: 20.11.1
 
       - run: npm install -g npm@^8
 
       - name: Set up JDK 11 for Java testing
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           java-version: 11
           distribution: adopt-hotspot
@@ -36,6 +36,8 @@ jobs:
         run: |
           # Fix annoying Yarn issue: https://github.com/yarnpkg/yarn/issues/7866
           curl -sL https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
+          # Ditto but for Google:
+          curl -sL https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
 
           sudo apt-get update
           sudo apt-get install -y p7zip-full xterm
@@ -64,7 +66,7 @@ jobs:
           SENTRY_PROJECT: httptoolkit-server
           NPM_CONFIG_UNSAFE_PERM: true
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: distributables
           path: build/dist/*
@@ -78,7 +80,7 @@ jobs:
       - build
     steps:
       - name: Get our distributables
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: distributables
           path: distributables
