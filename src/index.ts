@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import envPaths from 'env-paths';
 import { Mutex } from 'async-mutex';
 
+import { delay, isErrorLike } from '@httptoolkit/util';
 import {
     PluggableAdmin,
     generateCACertificate
@@ -21,8 +22,6 @@ import { checkBrowserConfig } from './browsers';
 import { logError } from './error-tracking';
 import { IS_PROD_BUILD, MOCKTTP_ALLOWED_ORIGINS } from './constants';
 
-import { delay } from './util/promise';
-import { isErrorLike } from './util/error';
 import { readFile, checkAccess, writeFile, ensureDirectoryExists } from './util/fs';
 
 import { registerShutdownHandler, shutdown } from './shutdown';
@@ -57,7 +56,9 @@ async function generateHTTPSConfig(configPath: string) {
 
         return Promise.all([
             writeFile(certPath, newCertPair.cert).then(() => newCertPair.cert),
-            writeFile(keyPath, newCertPair.key)
+            writeFile(keyPath, newCertPair.key, {
+                mode: 0o600 // Only readable for ourselves, nobody else
+            })
         ]);
     });
 

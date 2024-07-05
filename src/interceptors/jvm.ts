@@ -1,15 +1,15 @@
 import _ from 'lodash';
 import * as path from 'path';
 
+import { delay, ErrorLike } from '@httptoolkit/util';
+
 import { Interceptor } from '.';
 
 import { HtkConfig } from '../config';
 import { spawnToResult, waitForExit } from '../util/process-management';
 import { OVERRIDE_JAVA_AGENT } from './terminal/terminal-env-overrides';
 import { logError } from '../error-tracking';
-import { delay } from '../util/promise';
 import { commandExists, canAccess } from '../util/fs';
-import { ErrorLike } from '../util/error';
 
 type JvmTarget = { pid: string, name: string, interceptedByProxy: number | undefined };
 
@@ -119,7 +119,7 @@ function testJavaBin(possibleJavaBin: string) {
             ]
         ),
         // Time out permanently after 30 seconds - this only runs once max anyway
-        delay(30000).then(() => {
+        delay(30000, { unref: true }).then(() => {
             throw new Error(`Java bin test for ${possibleJavaBin} timed out`);
         })
     ]);
@@ -127,6 +127,7 @@ function testJavaBin(possibleJavaBin: string) {
 
 const hasUnsupportedJvmError = (testOutput: string) =>
     testOutput.includes('com/sun/tools/attach/AgentLoadException') || // Old Java missing Attach classes
+    testOutput.includes('com.sun.tools.attach.AgentLoadException') || // Old Java missing Attach classes
     testOutput.includes('java.lang.UnsatisfiedLinkError: no attach in java.library.path') || // Similar
     testOutput.includes('Are we running in a JRE instead of a JDK') || // JREs aren't sufficient
     testOutput.includes('Unsupported major.minor version 52.0'); // Pre Java 8(!)
@@ -171,7 +172,7 @@ export class JvmInterceptor implements Interceptor {
             this.targetsPromise = this.getTargets()
                 .finally(() => { this.targetsPromise = undefined; });
         }
-        const targets = await this.targetsPromise
+        const targets = await this.targetsPromise;
 
         return {
             jvmTargets: _.keyBy(targets, 'pid')

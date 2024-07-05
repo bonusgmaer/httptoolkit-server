@@ -10,8 +10,8 @@ import type {
     RouteParameters
 } from 'express-serve-static-core';
 import type { ParsedQs } from 'qs';
+import { ErrorLike, StatusError } from '@httptoolkit/util';
 
-import { ErrorLike, StatusError } from '../util/error';
 import { logError } from '../error-tracking';
 import { ApiModel } from './api-model';
 import * as Client from '../client/client-types';
@@ -66,20 +66,33 @@ export function exposeRestAPI(
         });
     }));
 
+    // Get the complete details of a sub-part of interceptor state, i.e. even more detailed
+    // metadata about one target of many options available.
+    server.get('/interceptors/:id/metadata/:subId', handleErrors(async (req, res) => {
+        const interceptorId = req.params.id;
+        const subId = req.params.subId;
+
+        res.send({
+            interceptorMetadata: await apiModel.getInterceptorMetadata(
+                interceptorId,
+                'detailed',
+                subId
+            )
+        });
+    }));
+
     server.post('/interceptors/:id/activate/:proxyPort', handleErrors(async (req, res) => {
         const interceptorId = req.params.id;
         const proxyPort = parseInt(req.params.proxyPort, 10);
         if (isNaN(proxyPort)) throw new StatusError(400, `Could not parse required proxy port: ${req.params.proxyPort}`);
 
-        let interceptorOptions = req.body;
-
-        if (_.isEmpty(interceptorOptions) && !_.isEmpty(req.query)) {
-            // TEMPORARY (drop by August 2023) fix for UI bug that briefly passed options wrong
-            interceptorOptions = req.query;
-        }
-
+        const interceptorOptions = req.body;
         const result = await apiModel.activateInterceptor(interceptorId, proxyPort, interceptorOptions);
-        res.send({ result });
+
+        // No thrown error here doesn't mean success: we have non-reportable failures for cases like
+        // Global Chrome "prompt to confirm quit" errors. We return those as 200 { success: false, metadata: ... }
+
+        res.json({ result });
     }));
 
     server.post('/client/send', handleErrors(async (req, res) => {
@@ -180,8 +193,8 @@ function handleErrors<
             // Use default error handler if response started (kills the connection)
             if (res.headersSent) return next(error)
             else {
-                const status = (error.status && error.status >= 400 && error.status < 600)
-                    ? error.status
+                const status = (error.statusCode && error.statusCode >= 400 && error.statusCode < 600)
+                    ? error.statusCode
                     : 500;
 
                 res.status(status).send({
