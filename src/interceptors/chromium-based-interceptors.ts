@@ -50,8 +50,8 @@ const getChromiumLaunchOptions = async (
         options: [
             // Trust our CA certificate's fingerprint:
             `--ignore-certificate-errors-spki-list=${spkiFingerprint}`,
-            // Disable annoying "What's New" page
-            '--disable-features=ChromeWhatsNewUI',
+            // Disable annoying "What's New" page & side panel (and its annoying bookmarks popup)
+            '--disable-features=ChromeWhatsNewUI,SidePanelPinning',
             // Avoid annoying extra network noise:
             '--disable-background-networking',
             // Disable component update (without disabling components themselves, e.g. widevine)
@@ -62,7 +62,6 @@ const getChromiumLaunchOptions = async (
                 // Install HTTP Toolkit's extension, for advanced hook setup. Feature
                 // flagged for now as it's still new & largely untested.
                 ? [
-
                     `--load-extension=${WEBEXTENSION_INSTALL.path}`
                 ]
                 : []
@@ -236,8 +235,10 @@ abstract class ExistingChromiumBasedInterceptor implements Interceptor {
                 return proc.bin && (
                     // Find a binary that exactly matches the specific command:
                     proc.bin === browserDetails.command ||
-                    // Or whose binary who's matches the path for this specific variant:
-                    proc.bin.includes(`${browserDetails.name}/${browserDetails.type}`)
+                    // Or who matches the path for this specific variant:
+                    proc.bin.includes(`${browserDetails.name}/${browserDetails.type}`) ||
+                    // Or the snap for this variant:
+                    proc.bin.includes(`/snap/${browserDetails.name}/`)
                 );
             }
         });
@@ -258,9 +259,6 @@ abstract class ExistingChromiumBasedInterceptor implements Interceptor {
         webExtensionEnabled?: boolean
     } = { closeConfirmed: false }) {
         if (!this.isActivable()) return;
-
-        const hideWarningServer = new HideWarningServer(this.config);
-        await hideWarningServer.start('https://amiusing.httptoolkit.tech');
 
         const existingPid = await this.findExistingPid();
         if (existingPid) {
@@ -287,6 +285,9 @@ abstract class ExistingChromiumBasedInterceptor implements Interceptor {
                 await waitForExit(existingPid);
             }
         }
+
+        const hideWarningServer = new HideWarningServer(this.config);
+        await hideWarningServer.start('https://amiusing.httptoolkit.tech');
 
         const browserDetails = await getBrowserDetails(this.config.configPath, this.variantName);
         const launchOptions = await getChromiumLaunchOptions(
@@ -416,6 +417,17 @@ export class FreshChromeCanary extends FreshChromiumBasedInterceptor {
 export class FreshChromium extends FreshChromiumBasedInterceptor {
 
     id = 'fresh-chromium';
+    version = '1.0.0';
+
+    constructor(config: HtkConfig) {
+        super(config, 'chromium');
+    }
+
+};
+
+export class ExistingChromium extends ExistingChromiumBasedInterceptor {
+
+    id = 'existing-chromium';
     version = '1.0.0';
 
     constructor(config: HtkConfig) {
