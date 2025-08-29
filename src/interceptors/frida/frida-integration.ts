@@ -31,7 +31,7 @@ export interface FridaTarget {
     name: string;
 }
 
-export const FRIDA_VERSION = '16.6.1';
+export const FRIDA_VERSION = '17.2.14';
 
 export const FRIDA_DEFAULT_PORT = 27042;
 export const FRIDA_ALTERNATE_PORT = 24072; // Reversed to mildly inconvenience detection
@@ -41,10 +41,10 @@ export const FRIDA_BINARY_NAME = `adirf-server-${FRIDA_VERSION}`; // Reversed to
 // To update this, run `await require('frida-js').calculateFridaSRI({ version, arch, platform })`
 export const FRIDA_SRIS = {
     'android': {
-        'arm': 'sha512-bLIDVOMwACFYC/tPkM2lsx7mdwLALnY1ScTqqAy+wkBD1kYPVx4LAF77hbIh49kotRyGll4FV2N0t3dD03I+OA==',
-        'arm64': 'sha512-kPcOEHSceFdts1nnUz/Vjmf2igyayEgCHc+slapr6GjCX0nC83eO8Psq8IF1UnDFx32jrVVvjRzJzTe6P5a85g==',
-        'x86': 'sha512-89IwpL5ki5nOU/sdjnQ7fItseUq1SpYr0HMMFKJMZzpfPQMNXFow5ps4l1ZpK/hdUFCVPHvxynhBc1ZTvcVDlQ==',
-        'x86_64': 'sha512-KBBj09sceLT6Sar4aTxZ1dJaoalBJZ4DfnoTRPER5KVwIAplTwbUVJtsnSI1gSWPyELq9XjO6ZjsWKOaQC79gg=='
+        'arm': 'sha512-LMjY+U0vtGg36QMCLTY6aJ6N8DSipBtsZcimj2HmYA9v+ANu4MsrHfccbCmp/caLDadCeZ51NtnL1EWZGJLi0w==',
+        'arm64': 'sha512-Y0TrqHsv2eb4NApCzcDAKG4CjIih/LyysKokFCRDkcmvF5qbDJd5dvgXzm/ypFxcA/X0EpnAqZGYWWjfZJw7WQ==',
+        'x86': 'sha512-DOvopRoAh+qfpgeIKpc+H4E8xURqy6YX8IrJO0iQB6aggOo+HyctS2caorNpuSQSbOqD3wmEmZoAd62RfqWPdw==',
+        'x86_64': 'sha512-YzoBZvY9EXtk/kRmmqRVrkxXUUF9nU1g+Reu900DKylcArvtwoM8HEEc+t05bvnLWARq66uylIBzrCvMbpkr+Q=='
     }
 } as const;
 
@@ -126,7 +126,7 @@ export async function testAndSelectProxyAddress(
 
     const ipTestScript = await buildIpTestScript(ips, proxyPort);
 
-    return await withTimeout(2000, new Promise<string>(async (resolve, reject) => {
+    return await withTimeout(10_000, new Promise<string>(async (resolve, reject) => {
         try {
             session.onMessage((message) => {
                 if (message.type === 'send') {
@@ -202,4 +202,56 @@ export async function launchScript(targetName: string, session: FridaJs.FridaAge
     });
 
     scriptLoaded = true;
+}
+
+// Common Frida session cache logic for Android & iOS
+export interface FridaSessionCache {
+    fridaSession: FridaJs.FridaSession;
+    cleanup: () => void;
+    timeout: NodeJS.Timeout;
+}
+
+export const FRIDA_SESSION_IDLE_TIMEOUT = 30_000;
+
+export function createFridaSessionCache() {
+    return {} as Record<string, FridaSessionCache>;
+}
+
+export function clearFridaSessionCache(cache: Record<string, FridaSessionCache>, hostId: string) {
+    const cached = cache[hostId];
+    if (cached) {
+        clearTimeout(cached.timeout);
+        cached.cleanup();
+        delete cache[hostId];
+    }
+}
+
+export async function getOrCreateFridaSession(
+    cache: Record<string, FridaSessionCache>,
+    hostId: string,
+    getStream: () => Promise<any>
+): Promise<{ fridaSession: FridaJs.FridaSession; wasCached: boolean }> {
+    let cached = cache[hostId];
+    if (cached) {
+        clearTimeout(cached.timeout);
+        cached.timeout = setTimeout(() => clearFridaSessionCache(cache, hostId), FRIDA_SESSION_IDLE_TIMEOUT);
+        return { fridaSession: cached.fridaSession, wasCached: true };
+    }
+
+    const fridaStream = await getStream();
+    const fridaSession = await FridaJs.connect({ stream: fridaStream });
+
+    const timeout = setTimeout(() => clearFridaSessionCache(cache, hostId), FRIDA_SESSION_IDLE_TIMEOUT);
+    const cleanup = () => fridaSession.disconnect()
+        .catch(() => {})
+        .finally(() => fridaStream.destroy());
+
+    cache[hostId] = {
+        fridaSession,
+        cleanup,
+        timeout
+    };
+
+    fridaStream.on('error', cleanup);
+    return { fridaSession, wasCached: false };
 }

@@ -67,7 +67,8 @@ export class AndroidAdbInterceptor implements Interceptor {
     }
 
     async activate(proxyPort: number, options: {
-        deviceId: string
+        deviceId: string,
+        enableSocks?: boolean
     }): Promise<void | {}> {
         const deviceClient = new DeviceClient(this.adbClient, options.deviceId);
 
@@ -106,7 +107,8 @@ export class AndroidAdbInterceptor implements Interceptor {
             ),
             port: proxyPort,
             localTunnelPort: proxyPort,
-            certFingerprint: generateSPKIFingerprint(this.config.https.certContent)
+            enableSocks: options.enableSocks ?? false,
+            certFingerprint: await generateSPKIFingerprint(this.config.https.certContent)
         };
         const intentData = urlSafeBase64(JSON.stringify(setupParams));
 
@@ -189,7 +191,7 @@ export class AndroidAdbInterceptor implements Interceptor {
                 console.log("Cert already installed, nothing to do");
             }
 
-            const spkiFingerprint = generateSPKIFingerprint(certContent);
+            const spkiFingerprint = await generateSPKIFingerprint(certContent);
 
             // Chrome requires system certificates to use certificate transparency, which we can't do. To work
             // around this, we need to explicitly trust our certificate in Chrome:

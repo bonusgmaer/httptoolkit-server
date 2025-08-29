@@ -52,6 +52,11 @@ const buildGraphql = (
     headers
 });
 
+const hasExited = (process: ChildProcess) => {
+    return process.exitCode !== null ||
+        process.signalCode !== null;
+};
+
 describe('End-to-end server API test', function () {
     // Timeout needs to be long, as first test runs (e.g. in CI) generate
     // fresh certificates, which can take a little while.
@@ -81,17 +86,6 @@ describe('End-to-end server API test', function () {
 
             serverProcess.stderr!.on('data', (d) => {
                 console.warn(d.toString());
-
-                // Some nodes warn about fs.promises - ignore it.
-                if (d.toString().includes('ExperimentalWarning: The fs.promises API')) return;
-                // We use _stream_wrap, in some node versions this is deprecated, for now ignore it
-                if (d.toString().includes('The _stream_wrap module is deprecated')) return;
-                // Deprecation in 'ftp' module (from pac-proxy) - only appears in built package, not source,
-                // as node doesn't show these deprecations by default when fired within node_modules.
-                if (d.toString().includes('Buffer() is deprecated') && process.env.TEST_BUILT_TARBALL) return;
-                // If the config parent folder doesn't exist at all, we'll see an ENOENT, that's ok:
-                if (d.toString().includes('[ENOENT]')) return;
-
                 stderr = stderr + d.toString();
             });
 
@@ -101,8 +95,19 @@ describe('End-to-end server API test', function () {
         });
     });
 
-    afterEach(() => {
-        if (!serverProcess.killed) serverProcess.kill();
+    afterEach(async () => {
+        const killedPromise = new Promise<void>((resolve, reject) => {
+            if (hasExited(serverProcess)) return resolve();
+
+            serverProcess.on('exit', resolve);
+            serverProcess.on('error', reject);
+        });
+
+        if (!hasExited(serverProcess)) {
+            serverProcess.kill();
+            await killedPromise;
+        }
+
         expect(stderr).to.equal('');
     });
 

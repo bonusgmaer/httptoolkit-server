@@ -20,7 +20,10 @@ import {
     getFridaServer,
     killProcess,
     launchScript,
-    testAndSelectProxyAddress
+    testAndSelectProxyAddress,
+    createFridaSessionCache,
+    clearFridaSessionCache,
+    getOrCreateFridaSession
 } from './frida-integration';
 
 const ANDROID_DEVICE_HTK_PATH = '/data/local/tmp/.httptoolkit';
@@ -181,18 +184,39 @@ const getFridaStream = (hostId: string, deviceClient: DeviceClient) =>
         });
     });
 
-export async function getAndroidFridaTargets(adbClient: AdbClient, hostId: string) {
+// Frida session cache for Android hosts
+const fridaSessionCache = createFridaSessionCache();
+
+async function getOrCreateAndroidFridaSession(hostId: string, deviceClient: DeviceClient) {
+    return getOrCreateFridaSession(
+        fridaSessionCache,
+        hostId,
+        () => getFridaStream(hostId, deviceClient)
+    );
+}
+
+export async function getAndroidFridaTargets(adbClient: AdbClient, hostId: string): Promise<Array<{
+    pid: number | null;
+    id: string;
+    name: string;
+}>> {
     const deviceClient = adbClient.getDevice(hostId);
 
-    const fridaStream = await getFridaStream(hostId, deviceClient);
+    let fridaSession: FridaJs.FridaSession;
+    let wasCached: boolean = false;
 
-    const fridaSession = await FridaJs.connect({
-        stream: fridaStream
-    });
-
-    const apps = await fridaSession.enumerateApplications();
-    fridaSession.disconnect().catch(() => {});
-    return apps;
+    try {
+        ({ fridaSession, wasCached } = await getOrCreateAndroidFridaSession(hostId, deviceClient));
+        return await fridaSession.enumerateApplications();
+    } catch (e) {
+        clearFridaSessionCache(fridaSessionCache, hostId);
+        if (wasCached) {
+            // When a cached session fails, we retry with a fresh one:
+            return getAndroidFridaTargets(adbClient, hostId);
+        } else {
+            throw e;
+        }
+    }
 }
 
 // Various ports which we know that certain apps use for non-HTTP traffic that we
@@ -206,13 +230,16 @@ export async function interceptAndroidFridaTarget(
     hostId: string,
     appId: string,
     caCertContent: string,
-    proxyPort: number
+    proxyPort: number,
+    enableSocks: boolean
 ) {
     console.log(`Intercepting ${appId} via Android Frida on ${hostId}...`);
     const deviceClient = adbClient.getDevice(hostId);
 
-    await createPersistentReverseTunnel(deviceClient, proxyPort, proxyPort)
-        .catch(() => {}); // If we can't tunnel that's OK - we'll use wifi/etc instead
+    // We try to tunnel the proxy over ADB, but if we can't then that's OK - we'll use wifi/etc instead
+    const tunnelCreated = await createPersistentReverseTunnel(deviceClient, proxyPort, proxyPort)
+        .then(() => true)
+        .catch(() => false)
 
     const fridaStream = await getFridaStream(hostId, deviceClient);
 
@@ -230,13 +257,21 @@ export async function interceptAndroidFridaTarget(
                 '127.0.0.1',
                 ...EMULATOR_HOST_IPS,
             ]
+        }).catch((e) => {
+            console.warn(`Failed to select proxy address for ${appId} on ${hostId}: ${e.message ?? e}`);
+
+            // This can be flaky in some weird cases - when all else fails, we always fallback to the
+            // ADB reverse tunnel if that's available
+            if (tunnelCreated) return '127.0.0.1'
+            else throw e;
         });
 
         const interceptionScript = await buildAndroidFridaScript(
             caCertContent,
             proxyIp,
             proxyPort,
-            KNOWN_APP_PROBLEMATIC_PORTS[appId] ?? []
+            KNOWN_APP_PROBLEMATIC_PORTS[appId] ?? [],
+            enableSocks
         );
 
         await launchScript(`Android (${appId})`, session, interceptionScript);
